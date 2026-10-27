@@ -1,9 +1,9 @@
 --!nocheck
 -- ============================================================
--- Aero Lite — v6 (Silent Aim + Audio Stripped)
+-- Aero — v7 (Image Perfect UI + Silent Aim + NPC Support)
 -- ============================================================
 
-print("[Aero Lite] booting...")
+print("[Aero] booting...")
 
 local Svc = {}
 do
@@ -15,14 +15,15 @@ do
     Svc.WS       = s("Workspace")
     Svc.HS       = s("HttpService")
     Svc.GuiSvc   = s("GuiService")
+    Svc.SS       = s("SoundService")
 end
 
 if not (Svc.Players and Svc.RS and Svc.UIS and Svc.TS and Svc.WS) then
-    warn("[Aero Lite] core services unavailable, aborting"); return
+    warn("[Aero] core services unavailable, aborting"); return
 end
 
 local LP = Svc.Players.LocalPlayer
-if not LP then warn("[Aero Lite] no LocalPlayer"); return end
+if not LP then warn("[Aero] no LocalPlayer"); return end
 
 local PG
 do
@@ -30,7 +31,7 @@ do
     if ok and v then PG = v end
     if not PG then PG = LP:FindFirstChild("PlayerGui") end
 end
-if not PG then warn("[Aero Lite] no PlayerGui"); return end
+if not PG then warn("[Aero] no PlayerGui"); return end
 
 local GuiParent = PG
 if type(gethui) == "function" then
@@ -48,12 +49,9 @@ for _, parent in ipairs({PG, GuiParent}) do
     end
 end
 
-local St, RB, SA
+local St, RB, SA, ESP, MOV
 
-local SETTINGS_FILE  = "AeroLiteSettings.json"
-local SETTINGS_SCHEMA = 6
-local AIM_SKIP_STUDS    = 3.0
-local POINT_BLANK_STUDS = 1.5
+local SETTINGS_FILE  = "AeroSettings.json"
 local RAGE_ABOVE_DISTANCE = 4
 local RAGE_MAX_DISTANCE   = 750
 
@@ -78,121 +76,63 @@ local THEMES = {
                hov=Color3.fromRGB(26,42,64), st=Color3.fromRGB(40,64,96), txt=Color3.fromRGB(230,240,255),
                dim=Color3.fromRGB(140,165,200), acc=Color3.fromRGB(40,165,255), off=Color3.fromRGB(40,58,84),
                trk=Color3.fromRGB(40,64,96) },
-    Red    = { bg=Color3.fromRGB(22,14,14), sb=Color3.fromRGB(30,18,18), pn=Color3.fromRGB(38,22,22),
-               hov=Color3.fromRGB(60,30,30), st=Color3.fromRGB(84,40,40), txt=Color3.fromRGB(250,230,230),
-               dim=Color3.fromRGB(200,140,140), acc=Color3.fromRGB(240,60,60), off=Color3.fromRGB(76,42,42),
-               trk=Color3.fromRGB(84,40,40) },
-    Green  = { bg=Color3.fromRGB(14,22,16), sb=Color3.fromRGB(18,30,22), pn=Color3.fromRGB(22,40,28),
-               hov=Color3.fromRGB(28,58,42), st=Color3.fromRGB(44,80,58), txt=Color3.fromRGB(225,255,230),
-               dim=Color3.fromRGB(140,200,160), acc=Color3.fromRGB(50,235,110), off=Color3.fromRGB(42,72,52),
-               trk=Color3.fromRGB(44,80,58) },
 }
-local THEME_COLOR_KEYS = {"bg","sb","pn","hov","st","txt","dim","acc","off","trk"}
-local COLOR_ROLE_LOOKUP = {}
-for _, palette in pairs(THEMES) do
-    for _, role in ipairs(THEME_COLOR_KEYS) do
-        COLOR_ROLE_LOOKUP[palette[role]] = role
-    end
-end
 
 local Settings = {
     Aimbot = { Enabled=false, WallCheck=true, TeamCheck=true, DeadCheck=true,
         SpawnProtCheck=true, TargetNPCs=true,
         AimPart="Head",
         MaxDistance=500,
-        ShowFOV=true, FOVSize=120, FOVColor=Color3.fromRGB(120,90,240), FOVTransparency=0.6,
-        Rainbow=false },
+        ShowFOV=true, FOVSize=120, FOVColor=Color3.fromRGB(120,90,240), FOVTransparency=0.6 },
     SilentAim = { Enabled=false, Method="Viewport", Bodypart="Head",
-        StickyAim=true, NoDelay=true,
-        ShowFOV=true, FOVSize=150, FOVColor=Color3.fromRGB(255, 0, 0) },
+        StickyAim=true, NoDelay=true, Hitsound=false,
+        ShowFOV=true, FOVSize=150, FOVColor=Color3.fromRGB(255, 0, 0),
+        TargetNPCs=true },
     Players = { Enabled=false, Chams=false, ShowName=true,
         ShowHealth=true, ShowDistance=true,
         TeamCheck=true, ShowTeam=true, Range=800,
-        RainbowEnemy=false, RainbowTeam=false,
         ShowNPCs=true,
         EnemyColor=Color3.fromRGB(255,60,60), TeammateColor=Color3.fromRGB(60,220,120) },
     Movement = { Fly=false, FlySpeed=60, Noclip=false },
     Ragebot  = { Enabled=false },
-    Keybinds = {
-        AimbotToggle  = Enum.KeyCode.F1,
-        AimKey        = Enum.UserInputType.MouseButton2,
-        EspToggle     = Enum.KeyCode.F3,
-        RagebotToggle = Enum.KeyCode.F5,
-        MenuKey       = Enum.KeyCode.RightShift,
-        PanicKey      = Enum.KeyCode.P,
-    },
-    UI       = { Theme="Purple", ShowEnabled=true, LastPage="Silent Aim", Position=nil },
+    UI       = { Theme="Purple", LastPage="Silent Aim", Position=nil },
 }
 
 local uiToggleRefs = {}
 local PF = { onSaveStatus = nil }
 
+-- Serialization
 function PF.serializeVal(v)
     local ty = typeof(v)
     if ty == "Color3" then return { __t = "Color3", r = v.R, g = v.G, b = v.B } end
-    if ty == "EnumItem" then
-        local typeName = tostring(v.EnumType):match("^Enum%.(.+)$") or ""
-        return { __t = "EnumItem", e = typeName, n = v.Name }
-    end
+    if ty == "EnumItem" then return { __t = "EnumItem", e = tostring(v.EnumType):match("^Enum%.(.+)$") or "", n = v.Name } end
     if type(v) == "table" then
-        local o = {}
-        for k, val in pairs(v) do o[k] = PF.serializeVal(val) end
-        return o
+        local o = {}; for k, val in pairs(v) do o[k] = PF.serializeVal(val) end; return o
     end
     return v
 end
 
 function PF.deserializeVal(v)
     if type(v) ~= "table" then return v end
-    if v.__t == "Color3" then
-        if type(v.r) == "number" and type(v.g) == "number" and type(v.b) == "number" then
-            return Color3.new(v.r, v.g, v.b)
-        end
-        return nil
-    end
+    if v.__t == "Color3" then return Color3.new(v.r, v.g, v.b) end
     if v.__t == "EnumItem" then
-        if type(v.e) == "string" and #v.e > 0 and type(v.n) == "string" and #v.n > 0 then
-            local ok, et = pcall(function() return Enum[v.e] end)
-            if ok and et then
-                local ok2, item = pcall(function() return et[v.n] end)
-                if ok2 and item then return item end
-            end
-        end
+        local ok, et = pcall(function() return Enum[v.e] end)
+        if ok and et then local ok2, item = pcall(function() return et[v.n] end); if ok2 then return item end end
         return nil
     end
-    local o = {}
-    for k, val in pairs(v) do
-        local dv = PF.deserializeVal(val)
-        if dv ~= nil then o[k] = dv end
-    end
-    return o
-end
-
-function PF.deepCopy(t)
-    if type(t) ~= "table" then return t end
-    local o = {}
-    for k, v in pairs(t) do o[k] = PF.deepCopy(v) end
-    return o
+    local o = {}; for k, val in pairs(v) do local dv = PF.deserializeVal(val); if dv ~= nil then o[k] = dv end end; return o
 end
 
 function PF.merge(dst, src)
     for k, v in pairs(src) do
-        if type(v) == "table" and type(dst[k]) == "table" then
-            PF.merge(dst[k], v)
-        else
-            dst[k] = PF.deepCopy(v)
-        end
+        if type(v) == "table" and type(dst[k]) == "table" then PF.merge(dst[k], v) else dst[k] = v end
     end
 end
 
 function PF.saveSettingsNow()
     if type(writefile) ~= "function" or not Svc.HS then return false end
-    local payload = { schemaVersion = SETTINGS_SCHEMA, Settings = PF.serializeVal(Settings) }
-    local okEnc, json = pcall(function() return Svc.HS:JSONEncode(payload) end)
-    if not okEnc then return false end
-    local okWrite = pcall(writefile, SETTINGS_FILE, json)
+    local okWrite = pcall(writefile, SETTINGS_FILE, Svc.HS:JSONEncode({ Settings = PF.serializeVal(Settings) }))
     if PF.onSaveStatus then pcall(PF.onSaveStatus, okWrite) end
-    return okWrite
 end
 
 function PF.loadAutoSettings()
@@ -200,43 +140,19 @@ function PF.loadAutoSettings()
     local ok, data = pcall(readfile, SETTINGS_FILE)
     if not ok or not data then return false end
     local okDec, decoded = pcall(function() return Svc.HS:JSONDecode(data) end)
-    if not okDec or type(decoded) ~= "table" or type(decoded.Settings) ~= "table" then return false end
-    local restored = PF.deserializeVal(decoded.Settings)
-    for section, tbl in pairs(restored) do
-        if type(tbl) == "table" and type(Settings[section]) == "table" then
-            PF.merge(Settings[section], tbl)
-        end
+    if okDec and type(decoded) == "table" and decoded.Settings then
+        PF.merge(Settings, PF.deserializeVal(decoded.Settings))
     end
-    return true
 end
 
-local Font     = Enum.Font.Gotham
-local FontMed  = Enum.Font.GothamMedium
-local FontBold = Enum.Font.GothamBold
-
-local T = {}
-for k, v in pairs(THEMES[Settings.UI.Theme] or THEMES.Purple) do T[k] = v end
-
-local ThemeBindings = {}
-local ThemeRefreshers = {}
-local Connections = {}
-local WindowConnections = {}
-local unloaded = false
-local AeroUnload
-
-local function track(c) table.insert(Connections, c); return c end
-local function trackWindow(c) table.insert(WindowConnections, c); return c end
+-- UI Library
+local T = THEMES.Purple
+local Font, FontMed, FontBold = Enum.Font.Gotham, Enum.Font.GothamMedium, Enum.Font.GothamBold
 
 local H = {}
 function H.new(class, props, children)
     local i = Instance.new(class)
-    for k, v in pairs(props or {}) do
-        i[k] = v
-        if typeof(v) == "Color3" then
-            local role = COLOR_ROLE_LOOKUP[v]
-            if role then ThemeBindings[#ThemeBindings+1] = { instance=i, property=k, role=role } end
-        end
-    end
+    for k, v in pairs(props or {}) do i[k] = v end
     for _, c in ipairs(children or {}) do c.Parent = i end
     return i
 end
@@ -244,35 +160,125 @@ function H.corner(r, p) return H.new("UICorner", {CornerRadius=UDim.new(0,r), Pa
 function H.stroke(c,t,p) return H.new("UIStroke", {Color=c, Thickness=t, ApplyStrokeMode=Enum.ApplyStrokeMode.Border, Parent=p}) end
 function H.pad(t,b,l,r,p) return H.new("UIPadding", {PaddingTop=UDim.new(0,t), PaddingBottom=UDim.new(0,b), PaddingLeft=UDim.new(0,l), PaddingRight=UDim.new(0,r), Parent=p}) end
 function H.clamp(v,lo,hi) return math.max(lo, math.min(hi, v)) end
-function H.unbindTheme(obj)
-    for i = #ThemeBindings, 1, -1 do
-        if ThemeBindings[i].instance == obj then table.remove(ThemeBindings, i) end
-    end
-end
-function H.gradient(parent, topAlpha, bottomAlpha)
-    H.new("UIGradient", {
-        Parent = parent, Rotation = 90,
-        Transparency = NumberSequence.new({
-            NumberSequenceKeypoint.new(0, topAlpha or 0),
-            NumberSequenceKeypoint.new(1, bottomAlpha or 0.35),
-        }),
-    })
-end
 
-local OverlayGui = H.new("ScreenGui", {
-    Name = "AeroOverlay", ResetOnSpawn = false, IgnoreGuiInset = true,
-    DisplayOrder = 2147483647, ZIndexBehavior = Enum.ZIndexBehavior.Sibling, Parent = GuiParent,
-})
-
+local OverlayGui = H.new("ScreenGui", { Name="AeroOverlay", ResetOnSpawn=false, IgnoreGuiInset=true, DisplayOrder=999999, Parent=GuiParent })
 local openLists = {}
-function H.closeAllDropdowns()
-    for i = #openLists, 1, -1 do
-        local e = openLists[i]
-        if e and e.close then pcall(e.close) end
+function H.closeAllDropdowns() for i = #openLists, 1, -1 do pcall(openLists[i].close) end; openLists = {} end
+
+local Wg = {}
+
+function Wg.makeToggle(parent, order, opts)
+    local value = opts.default == true
+    local row = H.new("Frame", { Size=UDim2.new(1,0,0,28), BackgroundTransparency=1, LayoutOrder=order, Parent=parent })
+    local lbl = H.new("TextLabel", { Text=opts.name, Font=FontBold, TextSize=13, TextColor3=T.txt, BackgroundTransparency=1, Size=UDim2.new(1,-32,1,0), TextXAlignment=Enum.TextXAlignment.Left, Parent=row })
+    local box = H.new("Frame", { AnchorPoint=Vector2.new(1,0.5), Position=UDim2.new(1,0,0.5,0), Size=UDim2.fromOffset(24,24), BackgroundColor3=value and T.acc or T.off, BorderSizePixel=0, Parent=row })
+    H.corner(12, box)
+    local inner = H.new("Frame", { AnchorPoint=Vector2.new(0.5,0.5), Position=UDim2.fromScale(0.5,0.5), Size=UDim2.fromOffset(value and 14 or 10, value and 14 or 10), BackgroundColor3=Color3.new(1,1,1), BackgroundTransparency=value and 0 or 0.4, BorderSizePixel=0, Parent=box })
+    H.corner(7, inner)
+    
+    local function apply(v)
+        value = v
+        Svc.TS:Create(box, TweenInfo.new(0.15), {BackgroundColor3=v and T.acc or T.off}):Play()
+        Svc.TS:Create(inner, TweenInfo.new(0.15), {Size=UDim2.fromOffset(v and 14 or 10, v and 14 or 10), BackgroundTransparency = v and 0 or 0.4}):Play()
+        if opts.callback then opts.callback(v) end
     end
-    openLists = {}
+    row.InputBegan:Connect(function(inp) if inp.UserInputType == Enum.UserInputType.MouseButton1 then apply(not value) end end)
+    return apply
 end
 
+function Wg.makeSlider(parent, order, opts)
+    local min, max, span = opts.min, opts.max, math.max(opts.max - opts.min, 1e-6)
+    local value = opts.default or min
+    local row = H.new("Frame", { Size=UDim2.new(1,0,0,44), BackgroundTransparency=1, LayoutOrder=order, Parent=parent })
+    H.new("TextLabel", { Text=opts.name, Font=FontBold, TextSize=13, TextColor3=T.txt, BackgroundTransparency=1, Size=UDim2.new(1,0,0,16), TextXAlignment=Enum.TextXAlignment.Left, Parent=row })
+    
+    local trackHit = H.new("TextButton", { Text="", AutoButtonColor=false, BackgroundTransparency=1, Position=UDim2.fromOffset(0,20), Size=UDim2.new(1,-40,0,20), Parent=row })
+    local trackBg = H.new("Frame", { AnchorPoint=Vector2.new(0,0.5), Position=UDim2.new(0,0,0.5,0), Size=UDim2.new(1,0,0,16), BackgroundColor3=T.sb, BorderSizePixel=0, Parent=trackHit })
+    H.corner(4, trackBg); H.stroke(T.st, 1, trackBg)
+    local fill = H.new("Frame", { Size=UDim2.fromScale((value-min)/span,1), BackgroundColor3=T.acc, BorderSizePixel=0, Parent=trackBg })
+    H.corner(4, fill)
+    
+    local valLbl = H.new("TextLabel", { Text=math.floor(value), Font=FontBold, TextSize=13, TextColor3=T.txt, BackgroundTransparency=1, AnchorPoint=Vector2.new(1,0.5), Position=UDim2.new(1,0,0.5,0), Size=UDim2.fromOffset(36,16), TextXAlignment=Enum.TextXAlignment.Right, Parent=row })
+    
+    local btnMinus = H.new("TextLabel", { Text="-", Font=FontBold, TextSize=14, TextColor3=T.txt, BackgroundColor3=T.sb, AnchorPoint=Vector2.new(1,0), Position=UDim2.new(1,-18,0,20), Size=UDim2.fromOffset(16,20), TextXAlignment=Enum.TextXAlignment.Center, Parent=row })
+    H.corner(4, btnMinus)
+    local btnPlus = H.new("TextLabel", { Text="+", Font=FontBold, TextSize=14, TextColor3=T.txt, BackgroundColor3=T.sb, AnchorPoint=Vector2.new(1,0), Position=UDim2.new(1,0,0,20), Size=UDim2.fromOffset(16,20), TextXAlignment=Enum.TextXAlignment.Center, Parent=row })
+    H.corner(4, btnPlus)
+
+    local dragging = false
+    local function update()
+        local pos = (value - min) / span
+        fill.Size = UDim2.fromScale(pos, 1)
+        valLbl.Text = math.floor(value)
+        if opts.callback then opts.callback(value) end
+    end
+    local function setFromX(x)
+        local p = H.clamp((x - trackBg.AbsolutePosition.X) / math.max(trackBg.AbsoluteSize.X,1), 0, 1)
+        value = min + p * (max - min)
+        update()
+    end
+    trackHit.InputBegan:Connect(function(inp) if inp.UserInputType == Enum.UserInputType.MouseButton1 then dragging = true; setFromX(inp.Position.X) end end)
+    Svc.UIS.InputChanged:Connect(function(inp) if dragging then setFromX(inp.Position.X) end end)
+    Svc.UIS.InputEnded:Connect(function(inp) if inp.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end end)
+    
+    btnMinus.InputBegan:Connect(function(inp) if inp.UserInputType == Enum.UserInputType.MouseButton1 then value = H.clamp(value - 5, min, max); update() end end)
+    btnPlus.InputBegan:Connect(function(inp) if inp.UserInputType == Enum.UserInputType.MouseButton1 then value = H.clamp(value + 5, min, max); update() end end)
+    return update
+end
+
+function Wg.makeDropdown(parent, order, opts)
+    local value = opts.default or opts.options[1]
+    local row = H.new("Frame", { Size=UDim2.new(1,0,0,48), BackgroundTransparency=1, LayoutOrder=order, Parent=parent })
+    H.new("TextLabel", { Text=opts.name, Font=FontBold, TextSize=13, TextColor3=T.txt, BackgroundTransparency=1, Size=UDim2.new(1,0,0,18), TextXAlignment=Enum.TextXAlignment.Left, Parent=row })
+    
+    local box = H.new("TextButton", { Text="", AutoButtonColor=false, Position=UDim2.fromOffset(0,20), Size=UDim2.new(1,0,0,24), BackgroundColor3=T.sb, BorderSizePixel=0, Parent=row })
+    H.corner(4, box); H.stroke(T.st,1,box)
+    local lbl = H.new("TextLabel", { Text=tostring(value), Font=FontMed, TextSize=13, TextColor3=T.txt, BackgroundTransparency=1, Size=UDim2.new(1,-24,1,0), Position=UDim2.fromOffset(8,0), TextXAlignment=Enum.TextXAlignment.Left, Parent=box })
+    H.new("TextLabel", { Text="+", Font=FontBold, TextSize=16, TextColor3=T.txt, BackgroundTransparency=1, AnchorPoint=Vector2.new(1,0.5), Position=UDim2.new(1,-8,0.5,0), Size=UDim2.fromOffset(12,16), Parent=box })
+    
+    local listFrame, closeToken = nil, 0
+    local function closeList()
+        if not listFrame then return end
+        local f = listFrame; listFrame = nil; closeToken = closeToken + 1
+        local token = closeToken
+        for i = #openLists, 1, -1 do if openLists[i].frame == f then table.remove(openLists, i) end end
+        Svc.TS:Create(f, TweenInfo.new(0.15), {Size=UDim2.fromOffset(f.AbsoluteSize.X, 0)}):Play()
+        task.delay(0.15, function() if token == closeToken then f:Destroy() end end)
+    end
+    box.MouseButton1Click:Connect(function()
+        if listFrame then closeList(); return end
+        H.closeAllDropdowns()
+        
+        local rowH = 26
+        local fullH = #opts.options * rowH + 8
+        local boxAbs, boxSize = box.AbsolutePosition, box.AbsoluteSize
+        local overlayAbs, overlaySize = OverlayGui.AbsolutePosition, OverlayGui.AbsoluteSize
+        
+        local listX = boxAbs.X - overlayAbs.X
+        local listY = boxAbs.Y - overlayAbs.Y + boxSize.Y + 2
+        if listY + fullH > overlaySize.Y then listY = boxAbs.Y - overlayAbs.Y - fullH - 2; if listY < 4 then listY = 4 end end
+        
+        listFrame = H.new("Frame", { BackgroundColor3=T.sb, BorderSizePixel=0, ZIndex=100, Position=UDim2.fromOffset(listX, listY), Size=UDim2.fromOffset(boxSize.X, 0), ClipsDescendants=true, Parent=OverlayGui })
+        H.corner(4, listFrame); H.stroke(T.st,1,listFrame)
+        local sl = H.new("ScrollingFrame", { Size=UDim2.fromScale(1,1), BackgroundTransparency=1, ScrollBarThickness=3, CanvasSize=UDim2.new(), AutomaticCanvasSize=Enum.AutomaticSize.Y, ZIndex=101, Parent=listFrame })
+        H.new("UIListLayout", {Padding=UDim.new(0,2), SortOrder=Enum.SortOrder.LayoutOrder, Parent=sl})
+        H.pad(4,4,4,4, sl)
+        
+        for i, opt in ipairs(opts.options) do
+            local r = H.new("TextButton", { Text=tostring(opt), Font=FontMed, TextSize=13, TextColor3=T.txt, AutoButtonColor=false, BackgroundColor3=(opt == value) and T.hov or T.pn, Size=UDim2.new(1,-4,0,rowH-2), LayoutOrder=i, ZIndex=102, Parent=sl })
+            H.corner(4, r)
+            r.MouseButton1Click:Connect(function()
+                value = opt; lbl.Text = tostring(opt)
+                if opts.callback then opts.callback(opt) end
+                closeList()
+            end)
+        end
+        Svc.TS:Create(listFrame, TweenInfo.new(0.18), {Size=UDim2.fromOffset(boxSize.X, fullH)}):Play()
+        table.insert(openLists, { frame = listFrame, close = closeList })
+    end)
+end
+
+-- Game Helpers
 local G = {}
 function G.getHeadPart(model)
     if not model then return nil end
@@ -323,31 +329,33 @@ function G.sameTeam(a, b)
 end
 
 St = {
-    fovGui = nil, fovCircle = nil,
-    saFovGui = nil, saFovCircle = nil,
-    espGui = nil, hudGui = nil, hudContainer = nil,
-    flyBV = nil, espCache = {},
-    aimingHeld = false, aimLockedTarget = nil, aimLockedPart = nil,
-    aimGain = 1.0, aimGainErrPrev = 0,
-    saTarget = nil, saLastPart = nil, saRandomPart = "Head", saRandomTime = 0,
-    panicTimes = {},
-    gui = nil, root = nil, pageContainer = nil, rootScale = nil, rootStrokeTween = nil,
-    noclipSaved = {}, noclipLastTick = 0,
-    npcCache = {}, targetCache = nil, targetCacheTime = 0,
-    menuVisible = true, firstWindowBuild = true,
-    savedCameraType = nil, savedCameraSubject = nil,
-    statsLabel = nil, fpsFrames = 0, currentFps = 0, uiHovered = false,
-    ragebotAnchoredRoot = nil,
+    saFovGui=nil, saFovCircle=nil, espGui=nil, fovGui=nil, fovCircle=nil,
+    flyBV=nil, espCache={}, aimingHeld=false, aimLockedTarget=nil, aimLockedPart=nil,
+    saTarget=nil, saRandomPart="Head", saRandomTime=0,
+    gui=nil, root=nil, pageContainer=nil, rootScale=nil,
+    npcCache={}, targetCache=nil, targetCacheTime=0,
+    menuVisible=true, savedCameraType=nil, savedCameraSubject=nil, uiHovered=false,
+    ragebotAnchoredRoot=nil, noclipSaved={}, noclipLastTick=0,
 }
-
-function St.clearAimState()
-    St.aimLockedTarget = nil; St.aimLockedPart = nil; St.aimGain = 1.0; St.aimGainErrPrev = 0
-end
 
 function St.getTargets()
     local now = tick()
     if St.targetCache and (now - St.targetCacheTime) < 0.05 then return St.targetCache end
     local list = {}
+    
+    -- NPC Scanning
+    local includeNPCs = Settings.SilentAim.TargetNPCs or Settings.Aimbot.TargetNPCs or Settings.Players.ShowNPCs or Settings.Ragebot.Enabled
+    if includeNPCs then
+        for i = #St.npcCache, 1, -1 do
+            local e = St.npcCache[i]
+            if not e.model.Parent or not e.hum.Parent or e.hum.Health <= 0 then table.remove(St.npcCache, i) end
+        end
+        for _, e in ipairs(St.npcCache) do
+            list[#list+1] = { plr=nil, hum=e.hum, root=e.root, model=e.model }
+        end
+    end
+    
+    -- Player Scanning
     for _, p in ipairs(Svc.Players:GetPlayers()) do
         if p ~= LP and p.Character then
             local hum = p.Character:FindFirstChildOfClass("Humanoid")
@@ -355,29 +363,36 @@ function St.getTargets()
             if hum and root and hum.Health > 0 then list[#list+1] = {plr=p, hum=hum, root=root, model=p.Character} end
         end
     end
-    St.targetCache = list
-    St.targetCacheTime = now
+    St.targetCache = list; St.targetCacheTime = now
     return list
 end
 
+Svc.WS.DescendantAdded:Connect(function(obj)
+    if obj:IsA("Humanoid") then
+        task.defer(function()
+            local parent = obj.Parent
+            if parent and parent:IsA("Model") and not Svc.Players:GetPlayerFromCharacter(parent) and parent ~= LP.Character then
+                local root = G.getRootPart(parent)
+                if root then table.insert(St.npcCache, {model=parent, hum=obj, root=root}) end
+            end
+        end)
+    end
+end)
+
 -- ============================================================
--- SILENT AIM (METATABLE HOOK)
+-- SILENT AIM
 -- ============================================================
-SA = {}
-SA.hooked = false
-SA.oldNamecall = nil
+SA = { hooked=false, oldNamecall=nil }
 
 local function getSilentAimTarget()
     if not Settings.SilentAim.Enabled or not G.alive() or not Camera then return nil end
-    
     local vp = Camera.ViewportSize
     local cx, cy = vp.X * 0.5, vp.Y * 0.5
     local best, bestDist = nil, math.huge
 
     if Settings.SilentAim.StickyAim and St.saTarget then
         if St.saTarget.model and St.saTarget.model.Parent and St.saTarget.hum.Health > 0 then
-            local root = St.saTarget.root
-            local sp = Camera:WorldToViewportPoint(root.Position)
+            local sp = Camera:WorldToViewportPoint(St.saTarget.root.Position)
             local d = math.sqrt((sp.X - cx)^2 + (sp.Y - cy)^2)
             if d <= Settings.SilentAim.FOVSize then return St.saTarget end
         end
@@ -386,8 +401,7 @@ local function getSilentAimTarget()
 
     for _, t in ipairs(St.getTargets()) do
         if t.plr and Settings.Players.TeamCheck and G.sameTeam(LP, t.plr) then continue end
-        local root = t.root
-        local sp, onScreen = Camera:WorldToViewportPoint(root.Position)
+        local sp, onScreen = Camera:WorldToViewportPoint(t.root.Position)
         if onScreen and sp.Z > 0 then
             local d = math.sqrt((sp.X - cx)^2 + (sp.Y - cy)^2)
             if d <= Settings.SilentAim.FOVSize then
@@ -431,15 +445,22 @@ function SA.hook()
                 if part then
                     local args = {...}
                     if method == "Raycast" then
-                        local origin = args[1]
-                        local direction = args[2]
-                        local length = direction.Magnitude
-                        local newDir = (part.Position - origin).Unit * length
-                        args[2] = newDir
+                        local origin, direction = args[1], args[2]
+                        args[2] = (part.Position - origin).Unit * direction.Magnitude
                     elseif method == "FindPartOnRay" then
                         local ray = args[1]
-                        local newRay = Ray.new(ray.Origin, (part.Position - ray.Origin).Unit * ray.Direction.Magnitude)
-                        args[1] = newRay
+                        args[1] = Ray.new(ray.Origin, (part.Position - ray.Origin).Unit * ray.Direction.Magnitude)
+                    end
+                    if Settings.SilentAim.Hitsound then
+                        task.spawn(function()
+                            local snd = Instance.new("Sound", Svc.SS)
+                            snd.SoundId = "rbxasset://sounds/electronicpingshort.wav"
+                            snd.Volume = 0.5
+                            snd:Play()
+                            Svc.TS:Create(snd, TweenInfo.new(0.5), {Volume=0}):Play()
+                            task.wait(0.5)
+                            snd:Destroy()
+                        end)
                     end
                     return oldNamecall(self, unpack(args))
                 end
@@ -447,7 +468,6 @@ function SA.hook()
         end
         return oldNamecall(self, ...)
     end)
-    
     setreadonly(mt, true)
     SA.oldNamecall = oldNamecall
     SA.hooked = true
@@ -457,252 +477,225 @@ function SA.unhook()
     if not SA.hooked then return end
     local mt = getrawmetatable(game)
     if mt and SA.oldNamecall then
-        setreadonly(mt, false)
-        mt.__namecall = SA.oldNamecall
-        setreadonly(mt, true)
+        setreadonly(mt, false); mt.__namecall = SA.oldNamecall; setreadonly(mt, true)
     end
     SA.hooked = false
 end
 
 function St.buildSAFOV()
     if St.saFovGui then St.saFovGui:Destroy() end
-    St.saFovGui = H.new("ScreenGui", {
-        Name = "AeroSAFOV", ResetOnSpawn=false, IgnoreGuiInset=false,
-        DisplayOrder=2147483638, Parent=GuiParent,
-    })
-    St.saFovCircle = H.new("Frame", {
-        AnchorPoint=Vector2.new(0.5,0.5),
-        Position=UDim2.fromScale(0.5,0.5),
-        Size=UDim2.fromOffset(Settings.SilentAim.FOVSize*2, Settings.SilentAim.FOVSize*2),
-        BackgroundTransparency=1, BorderSizePixel=0, Parent=St.saFovGui,
-    })
+    St.saFovGui = H.new("ScreenGui", { Name="AeroSAFOV", ResetOnSpawn=false, IgnoreGuiInset=false, DisplayOrder=2147483638, Parent=GuiParent })
+    St.saFovCircle = H.new("Frame", { AnchorPoint=Vector2.new(0.5,0.5), Position=UDim2.fromScale(0.5,0.5), Size=UDim2.fromOffset(Settings.SilentAim.FOVSize*2, Settings.SilentAim.FOVSize*2), BackgroundTransparency=1, BorderSizePixel=0, Parent=St.saFovGui })
     H.corner(9999, St.saFovCircle)
-    local s = H.stroke(Settings.SilentAim.FOVColor, 1.5, St.saFovCircle)
-    H.unbindTheme(s)
+    H.stroke(Settings.SilentAim.FOVColor, 1.5, St.saFovCircle)
     St.saFovGui.Enabled = Settings.SilentAim.ShowFOV and Settings.SilentAim.Enabled
 end
 
 -- ============================================================
--- GUI BUILDER
+-- AIMBOT / RAGEBOT / MOVEMENT / ESP
 -- ============================================================
-local Wg = {}
-
-function Wg.makeToggle(parent, order, opts)
-    local value = opts.default == true
-    local colorTween, innerTween
-    local row = H.new("TextButton", { Text="", AutoButtonColor=false, BackgroundTransparency=1, Size=UDim2.new(1,0,0,28), LayoutOrder=order, Parent=parent })
-    local lbl = H.new("TextLabel", { Text=opts.name, Font=FontMed, TextSize=13, TextColor3=T.txt, BackgroundTransparency=1, Size=UDim2.new(1,-32,1,0), TextXAlignment=Enum.TextXAlignment.Left, Parent=row })
-    local box = H.new("Frame", { AnchorPoint=Vector2.new(1,0.5), Position=UDim2.new(1,0,0.5,0), Size=UDim2.fromOffset(20,20), BackgroundColor3=value and T.acc or T.off, BorderSizePixel=0, Parent=row })
-    H.corner(5, box)
-    local inner = H.new("Frame", { AnchorPoint=Vector2.new(0.5,0.5), Position=UDim2.fromScale(0.5,0.5), Size=UDim2.fromOffset(value and 12 or 8, value and 12 or 8), BackgroundColor3=Color3.fromRGB(255,255,255), BorderSizePixel=0, BackgroundTransparency=value and 0 or 0.4, Parent=box })
-    H.corner(9999, inner)
-    
-    local function apply(v, silent)
-        local changed = (v ~= value)
-        value = v
-        if colorTween then colorTween:Cancel() end
-        if innerTween then innerTween:Cancel() end
-        colorTween = Svc.TS:Create(box, TweenInfo.new(0.15), {BackgroundColor3=v and T.acc or T.off})
-        innerTween = Svc.TS:Create(inner, TweenInfo.new(0.15), {Size=UDim2.fromOffset(v and 12 or 8, v and 12 or 8), BackgroundTransparency = v and 0 or 0.4})
-        colorTween:Play(); innerTween:Play()
-        if changed and opts.callback then opts.callback(v) end
-    end
-    row.MouseButton1Click:Connect(function() apply(not value) end)
-    return apply
-end
-
-function Wg.makeSlider(parent, order, opts)
-    local min, max = opts.min, opts.max
-    local span = math.max(max - min, 1e-6)
-    local value = opts.default or min
-    local row = H.new("Frame", { Size=UDim2.new(1,0,0,42), BackgroundTransparency=1, LayoutOrder=order, Parent=parent })
-    local lbl = H.new("TextLabel", { Text=opts.name, Font=Font, TextSize=13, TextColor3=T.txt, BackgroundTransparency=1, Size=UDim2.new(0.6,0,0,16), TextXAlignment=Enum.TextXAlignment.Left, Parent=row })
-    local valLbl = H.new("TextLabel", { Text=math.floor(value), Font=FontMed, TextSize=13, TextColor3=T.txt, BackgroundTransparency=1, AnchorPoint=Vector2.new(1,0), Position=UDim2.new(1,0,0,0), Size=UDim2.new(0.4,0,0,16), TextXAlignment=Enum.TextXAlignment.Right, Parent=row })
-    local trackHit = H.new("TextButton", { Text="", AutoButtonColor=false, BackgroundTransparency=1, BorderSizePixel=0, Position=UDim2.fromOffset(6,24), Size=UDim2.new(1,-12,0,12), Parent=row })
-    local trackVis = H.new("Frame", { AnchorPoint=Vector2.new(0,0.5), Position=UDim2.new(0,0,0.5,0), Size=UDim2.new(1,0,0,4), BackgroundColor3=T.trk, BorderSizePixel=0, Parent=trackHit })
-    H.corner(2, trackVis)
-    local fill = H.new("Frame", { Size=UDim2.fromScale((value-min)/span,1), BackgroundColor3=T.acc, BorderSizePixel=0, Parent=trackVis })
-    H.corner(2, fill)
-    local knob = H.new("Frame", { AnchorPoint=Vector2.new(0.5,0.5), Position=UDim2.new((value-min)/span,0,0.5,0), Size=UDim2.fromOffset(12,12), BackgroundColor3=Color3.new(1,1,1), BorderSizePixel=0, ZIndex=2, Parent=trackVis })
-    H.corner(6, knob)
-    
-    local dragging = false
-    local function setFromX(x)
-        local rawPos = H.clamp((x - trackVis.AbsolutePosition.X) / math.max(trackVis.AbsoluteSize.X,1), 0, 1)
-        value = min + rawPos * (max - min)
-        local pos = (value - min) / span
-        fill.Size = UDim2.fromScale(pos,1)
-        knob.Position = UDim2.new(pos,0,0.5,0)
-        valLbl.Text = math.floor(value)
-        if opts.callback then opts.callback(value) end
-    end
-    trackHit.InputBegan:Connect(function(inp) if inp.UserInputType == Enum.UserInputType.MouseButton1 then dragging = true; setFromX(inp.Position.X) end end)
-    trackWindow(Svc.UIS.InputChanged:Connect(function(inp) if dragging then setFromX(inp.Position.X) end end))
-    trackWindow(Svc.UIS.InputEnded:Connect(function(inp) if inp.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end end))
-    return function(v) value = v; setFromX(0) end
-end
-
-function Wg.makeDropdown(parent, order, opts)
-    local value = opts.default or opts.options[1]
-    local row = H.new("Frame", { Size=UDim2.new(1,0,0,44), BackgroundTransparency=1, LayoutOrder=order, Parent=parent })
-    H.new("TextLabel", { Text=opts.name, Font=FontBold, TextSize=13, TextColor3=T.txt, BackgroundTransparency=1, Size=UDim2.new(1,0,0,18), TextXAlignment=Enum.TextXAlignment.Left, Parent=row })
-    local box = H.new("TextButton", { Text="", AutoButtonColor=false, Position=UDim2.fromOffset(0,20), Size=UDim2.new(1,0,0,24), BackgroundColor3=T.sb, BorderSizePixel=0, Parent=row })
-    H.corner(6, box); H.stroke(T.st,1,box)
-    local lbl = H.new("TextLabel", { Text=tostring(value), Font=FontMed, TextSize=12, TextColor3=T.txt, BackgroundTransparency=1, Size=UDim2.new(1,-24,1,0), Position=UDim2.fromOffset(8,0), TextXAlignment=Enum.TextXAlignment.Left, Parent=box })
-    H.new("TextLabel", { Text="+", Font=FontBold, TextSize=14, TextColor3=T.dim, BackgroundTransparency=1, AnchorPoint=Vector2.new(1,0.5), Position=UDim2.new(1,-8,0.5,0), Size=UDim2.fromOffset(12,16), Parent=box })
-    
-    local listFrame, blockerConn, closeToken = nil, nil, 0
-    local function closeList()
-        if not listFrame then return end
-        local f = listFrame; listFrame = nil; closeToken = closeToken + 1
-        local token = closeToken
-        for i = #openLists, 1, -1 do if openLists[i].frame == f then table.remove(openLists, i) end end
-        local w = f.AbsoluteSize.X
-        Svc.TS:Create(f, TweenInfo.new(0.15), {Size=UDim2.fromOffset(w, 0)}):Play()
-        task.delay(0.15, function() if token == closeToken then f:Destroy() end end)
-        if blockerConn then blockerConn:Disconnect(); blockerConn = nil end
-    end
-    box.MouseButton1Click:Connect(function()
-        if listFrame then closeList(); return end
-        H.closeAllDropdowns()
-        
-        local optionList = opts.options
-        local rowH = 26
-        local fullH = #optionList * rowH + 8
-        local boxAbs = box.AbsolutePosition
-        local boxSize = box.AbsoluteSize
-        local overlayAbs = OverlayGui.AbsolutePosition
-        local overlaySize = OverlayGui.AbsoluteSize
-        
-        local listX = boxAbs.X - overlayAbs.X
-        local listY = boxAbs.Y - overlayAbs.Y + boxSize.Y + 2
-        if listY + fullH > overlaySize.Y then listY = boxAbs.Y - overlayAbs.Y - fullH - 2; if listY < 4 then listY = 4 end end
-        
-        listFrame = H.new("Frame", { BackgroundColor3=T.sb, BorderSizePixel=0, ZIndex=100, Position=UDim2.fromOffset(listX, listY), Size=UDim2.fromOffset(boxSize.X, 0), ClipsDescendants=true, Parent=OverlayGui })
-        H.corner(6, listFrame); H.stroke(T.st,1,listFrame)
-        local sl = H.new("ScrollingFrame", { Size=UDim2.fromScale(1,1), BackgroundTransparency=1, ScrollBarThickness=3, ScrollBarImageColor3=T.st, CanvasSize=UDim2.new(), AutomaticCanvasSize=Enum.AutomaticSize.Y, ZIndex=101, Parent=listFrame })
-        H.new("UIListLayout", {Padding=UDim.new(0,2), SortOrder=Enum.SortOrder.LayoutOrder, Parent=sl})
-        H.pad(4,4,4,4, sl)
-        
-        for i, opt in ipairs(optionList) do
-            local r = H.new("TextButton", { Text=tostring(opt), Font=FontMed, TextSize=12, TextColor3=T.txt, AutoButtonColor=false, BackgroundColor3=(opt == value) and T.hov or T.pn, Size=UDim2.new(1,-4,0,rowH-2), LayoutOrder=i, ZIndex=102, Parent=sl })
-            H.corner(4, r)
-            r.MouseButton1Click:Connect(function()
-                value = opt; lbl.Text = tostring(opt)
-                if opts.callback then opts.callback(opt) end
-                closeList()
-            end)
+function St.aimStep()
+    if not Settings.Aimbot.Enabled or not G.alive() or not St.aimingHeld or Settings.Ragebot.Enabled then return end
+    local t = St.aimLockedTarget
+    if not t or not t.model.Parent or t.hum.Health <= 0 then
+        t = nil
+        for _, tgt in ipairs(St.getTargets()) do
+            if tgt.plr and Settings.Aimbot.TeamCheck and G.sameTeam(LP, tgt.plr) then continue end
+            local dist = (Camera.CFrame.Position - tgt.root.Position).Magnitude
+            if dist < Settings.Aimbot.MaxDistance then t = tgt; break end
         end
-        Svc.TS:Create(listFrame, TweenInfo.new(0.18), {Size=UDim2.fromOffset(boxSize.X, fullH)}):Play()
-        table.insert(openLists, { frame = listFrame, close = closeList })
-    end)
+        St.aimLockedTarget = t
+    end
+    if t then
+        local part = G.getBodyPart(t.model, Settings.Aimbot.AimPart)
+        if part then
+            local sp, on = Camera:WorldToViewportPoint(part.Position)
+            if on then
+                local cx, cy = Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2
+                if mouseMoveRel then mouseMoveRel(sp.X - cx, sp.Y - cy) end
+            end
+        end
+    end
+end
+
+function St.rageStep()
+    if not Settings.Ragebot.Enabled or not G.alive() then return end
+    local char = LP.Character
+    local hrp = G.getRootPart(char)
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hrp or not hum then return end
+    
+    local best, bestScore = nil, -math.huge
+    for _, t in ipairs(St.getTargets()) do
+        local n = tostring(t.model.Name or ""):lower()
+        if n:find("explosive") then continue end
+        local prio = n:find("skeleton") and 100 or 50
+        local d = (hrp.Position - t.root.Position).Magnitude
+        if d < RAGE_MAX_DISTANCE then
+            local score = prio * 100000 - d
+            if score > bestScore then bestScore = score; best = t end
+        end
+    end
+    if best then
+        hum.PlatformStand = true
+        hum.AutoRotate = false
+        local head = G.getHeadPart(best.model)
+        local abovePos = best.root.Position + Vector3.new(0, RAGE_ABOVE_DISTANCE, 0)
+        hrp.CFrame = CFrame.lookAt(abovePos, head.Position, Vector3.new(0,0,1))
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        if not hrp.Anchored then hrp.Anchored = true end
+    else
+        if hrp.Anchored then hrp.Anchored = false end
+        hum.PlatformStand = false
+        hum.AutoRotate = true
+    end
+end
+
+function St.moveStep()
+    local char = LP.Character
+    local hrp, hum = G.getRootPart(char), char and char:FindFirstChildOfClass("Humanoid")
+    if not hrp or not hum then return end
+    
+    if Settings.Movement.Fly then
+        if not St.flyBV or not St.flyBV.Parent then
+            St.flyBV = H.new("BodyVelocity", {MaxForce=Vector3.new(1e5,1e5,1e5), P=1250, Parent=hrp})
+        end
+        local move = Vector3.zero
+        if Svc.UIS:IsKeyDown(Enum.KeyCode.W) then move += Camera.CFrame.LookVector end
+        if Svc.UIS:IsKeyDown(Enum.KeyCode.S) then move -= Camera.CFrame.LookVector end
+        if Svc.UIS:IsKeyDown(Enum.KeyCode.A) then move -= Camera.CFrame.RightVector end
+        if Svc.UIS:IsKeyDown(Enum.KeyCode.D) then move += Camera.CFrame.RightVector end
+        if Svc.UIS:IsKeyDown(Enum.KeyCode.Space) then move += Vector3.yAxis end
+        if move.Magnitude > 0 then move = move.Unit end
+        St.flyBV.Velocity = move * Settings.Movement.FlySpeed
+    elseif St.flyBV then St.flyBV:Destroy(); St.flyBV = nil end
+    
+    if Settings.Movement.Noclip then
+        for _, p in ipairs(char:GetDescendants()) do
+            if p:IsA("BasePart") then p.CanCollide = false end
+        end
+    end
 end
 
 -- ============================================================
--- BUILD WINDOW
+-- BUILD WINDOW (EXACT IMAGE MATCH)
 -- ============================================================
 local function buildWindow()
+    if St.gui then St.gui:Destroy() end
+    H.closeAllDropdowns()
+    St.buildSAFOV()
+    
+    St.gui = H.new("ScreenGui", { Name="AeroUI", ResetOnSpawn=false, IgnoreGuiInset=true, DisplayOrder=2147483646, Parent=GuiParent })
+    local root = H.new("Frame", { Name="Root", AnchorPoint=Vector2.new(0.5,0.5), Position=UDim2.fromScale(0.5,0.5), Size=UDim2.fromOffset(500,600), BackgroundColor3=T.bg, BorderSizePixel=0, ClipsDescendants=true, Parent=St.gui })
+    St.root = root
+    H.corner(0, root)
+    
+    local topBar = H.new("TextButton", { Name="TopBar", Text="", AutoButtonColor=false, BackgroundTransparency=1, Size=UDim2.new(1,0,0,40), Parent=root })
+    H.new("TextLabel", { Text="Aero", Font=FontBold, TextSize=18, TextColor3=T.txt, BackgroundTransparency=1, Position=UDim2.fromOffset(16,10), Size=UDim2.fromOffset(200,20), TextXAlignment=Enum.TextXAlignment.Left, Parent=topBar })
+    
+    local sidebar = H.new("Frame", { Position=UDim2.fromOffset(0,40), Size=UDim2.new(0,120,1,-40), BackgroundColor3=T.sb, BorderSizePixel=0, Parent=root })
+    local sidebarScroll = H.new("ScrollingFrame", { Size=UDim2.fromScale(1,1), BackgroundTransparency=1, ScrollBarThickness=0, CanvasSize=UDim2.new(), AutomaticCanvasSize=Enum.AutomaticSize.Y, Parent=sidebar })
+    H.new("UIListLayout", {Padding=UDim.new(0,4), Parent=sidebarScroll})
+    H.pad(8,8,8,8, sidebarScroll)
+    
+    local pageContainer = H.new("Frame", { Position=UDim2.fromOffset(120,40), Size=UDim2.new(1,-120,1,-40), BackgroundTransparency=1, Parent=root })
+    H.pad(16,16,16,16, pageContainer)
+    
     local PAGES = {}
     local currentPage = nil
     local sidebarRows = {}
-    local sidebarTweens = {}
-
-    for _, c in ipairs(WindowConnections) do pcall(function() c:Disconnect() end) end
-    WindowConnections = {}
-    ThemeBindings = {}; ThemeRefreshers = {}
-    H.closeAllDropdowns()
-
-    if St.gui then pcall(function() St.gui:Destroy() end) end
-    St.buildSAFOV()
-
-    St.gui = H.new("ScreenGui", { Name="AeroUI", ResetOnSpawn=false, IgnoreGuiInset=true, DisplayOrder=2147483646, Parent=GuiParent })
-
-    local root = H.new("Frame", { Name="Root", AnchorPoint=Vector2.new(0.5,0.5), Position=UDim2.fromScale(0.5,0.5), Size=UDim2.fromOffset(820,560), BackgroundColor3=T.bg, BorderSizePixel=0, ClipsDescendants=true, Parent=St.gui })
-    St.root = root
-    H.corner(16, root); H.stroke(T.st,1,root); H.gradient(root, 0, 0.5)
-    St.rootScale = H.new("UIScale", {Scale = 1, Parent = root})
-    root.MouseEnter:Connect(function() St.uiHovered = true end)
-    root.MouseLeave:Connect(function() St.uiHovered = false end)
-
-    local topBar = H.new("TextButton", { Name="TopBar", Text="", AutoButtonColor=false, BackgroundTransparency=1, Size=UDim2.new(1,0,0,54), Parent=root })
-    H.new("TextLabel", { Text="Aero", Font=FontBold, TextSize=19, TextColor3=T.txt, BackgroundTransparency=1, Position=UDim2.fromOffset(20,14), Size=UDim2.fromOffset(200,26), TextXAlignment=Enum.TextXAlignment.Left, Parent=topBar })
-    
-    local body = H.new("Frame", { Name="Body", Position=UDim2.fromOffset(0,54), Size=UDim2.new(1,0,1,-54), BackgroundTransparency=1, Parent=root })
-    local sidebar = H.new("Frame", { Size=UDim2.new(0,190,1,0), BackgroundColor3=T.sb, BorderSizePixel=0, Parent=body })
-    H.corner(16, sidebar)
-    
-    local pageContainer = H.new("Frame", { Position=UDim2.fromOffset(190,0), Size=UDim2.new(1,-190,1,0), BackgroundTransparency=1, Parent=body })
-    H.pad(14,14,14,14, pageContainer)
 
     local function makePage(name)
         local page = H.new("Frame", { Name=name, Size=UDim2.fromScale(1,1), BackgroundTransparency=1, Visible=false, Parent=pageContainer })
-        PAGES[name] = page; return page
+        local scroll = H.new("ScrollingFrame", { Size=UDim2.fromScale(1,1), BackgroundTransparency=1, ScrollBarThickness=2, ScrollBarImageColor3=T.st, CanvasSize=UDim2.new(), AutomaticCanvasSize=Enum.AutomaticSize.Y, Parent=page })
+        H.new("UIListLayout", {Padding=UDim.new(0,12), SortOrder=Enum.SortOrder.LayoutOrder, Parent=scroll})
+        PAGES[name] = {page=page, content=scroll}
+        return scroll
     end
 
     -- ================= SILENT AIM PAGE =================
-    local saPage = makePage("Silent Aim")
-    local saL = H.new("ScrollingFrame", { Size=UDim2.fromScale(1,1), BackgroundTransparency=1, ScrollBarThickness=3, ScrollBarImageColor3=T.st, CanvasSize=UDim2.new(), AutomaticCanvasSize=Enum.AutomaticSize.Y, Parent=saPage })
-    H.new("UIListLayout", {Padding=UDim.new(0,10), SortOrder=Enum.SortOrder.LayoutOrder, Parent=saL})
-
-    H.new("TextLabel", { Text="Silent Aim", Font=FontBold, TextSize=15, TextColor3=T.txt, BackgroundTransparency=1, Size=UDim2.new(1,0,0,22), TextXAlignment=Enum.TextXAlignment.Left, LayoutOrder=1, Parent=saL })
+    local saL = makePage("Silent Aim")
     
-    local function makeCustomSAEnable()
-        local row = H.new("Frame", { Size=UDim2.new(1,0,0,28), BackgroundTransparency=1, LayoutOrder=2, Parent=saL })
-        local lbl = H.new("TextLabel", { Text="Silent Aim", Font=FontBold, TextSize=13, TextColor3=T.txt, BackgroundTransparency=1, Size=UDim2.new(1,-140,1,0), TextXAlignment=Enum.TextXAlignment.Left, Parent=row })
-        local hint = H.new("TextLabel", { Text="[LMB | always]", Font=FontMed, TextSize=12, TextColor3=T.dim, BackgroundTransparency=1, AnchorPoint=Vector2.new(1,0.5), Position=UDim2.new(1,-32,0.5,0), Size=UDim2.fromOffset(100,16), TextXAlignment=Enum.TextXAlignment.Right, Parent=row })
-        local box = H.new("Frame", { AnchorPoint=Vector2.new(1,0.5), Position=UDim2.new(1,0,0.5,0), Size=UDim2.fromOffset(20,20), BackgroundColor3=Settings.SilentAim.Enabled and T.acc or T.off, BorderSizePixel=0, Parent=row })
-        H.corner(10, box)
-        local inner = H.new("Frame", { AnchorPoint=Vector2.new(0.5,0.5), Position=UDim2.fromScale(0.5,0.5), Size=UDim2.fromOffset(Settings.SilentAim.Enabled and 12 or 8, Settings.SilentAim.Enabled and 12 or 8), BackgroundColor3=Color3.fromRGB(255,255,255), BorderSizePixel=0, BackgroundTransparency=Settings.SilentAim.Enabled and 0 or 0.4, Parent=box })
-        H.corner(9999, inner)
-        
-        row.InputBegan:Connect(function(inp)
-            if inp.UserInputType == Enum.UserInputType.MouseButton1 then
-                local newVal = not Settings.SilentAim.Enabled
-                Settings.SilentAim.Enabled = newVal
-                if newVal then SA.hook() else SA.unhook() end
-                if St.saFovGui then St.saFovGui.Enabled = newVal and Settings.SilentAim.ShowFOV end
-                
-                local cT = Svc.TS:Create(box, TweenInfo.new(0.15), {BackgroundColor3 = newVal and T.acc or T.off})
-                local iT = Svc.TS:Create(inner, TweenInfo.new(0.15), {Size=UDim2.fromOffset(newVal and 12 or 8, newVal and 12 or 8), BackgroundTransparency = newVal and 0 or 0.4})
-                cT:Play(); iT:Play()
-            end
-        end)
-    end
-    makeCustomSAEnable()
-
-    H.new("TextLabel", { Text="Targeting", Font=FontBold, TextSize=14, TextColor3=T.acc, BackgroundTransparency=1, Size=UDim2.new(1,0,0,22), TextXAlignment=Enum.TextXAlignment.Left, LayoutOrder=3, Parent=saL })
+    -- Header Title
+    local title = H.new("TextLabel", { Text="Silent Aim", Font=FontBold, TextSize=14, TextColor3=T.acc, BackgroundTransparency=1, Size=UDim2.new(1,0,0,20), TextXAlignment=Enum.TextXAlignment.Left, LayoutOrder=1, Parent=saL })
+    
+    -- Main Toggle Row
+    local mainTglRow = H.new("Frame", { Size=UDim2.new(1,0,0,30), BackgroundTransparency=1, LayoutOrder=2, Parent=saL })
+    local mtBox = H.new("Frame", { AnchorPoint=Vector2.new(0,0.5), Position=UDim2.new(0,0,0.5,0), Size=UDim2.fromOffset(30,16), BackgroundColor3=Settings.SilentAim.Enabled and T.acc or T.off, BorderSizePixel=0, Parent=mainTglRow })
+    H.corner(8, mtBox)
+    local mtInner = H.new("Frame", { AnchorPoint=Vector2.new(0,0.5), Position=UDim2.fromOffset(Settings.SilentAim.Enabled and 15 or 2,8), Size=UDim2.fromOffset(12,12), BackgroundColor3=Color3.new(1,1,1), BorderSizePixel=0, Parent=mtBox })
+    H.corner(6, mtInner)
+    H.new("TextLabel", { Text="Silent Aim", Font=FontBold, TextSize=13, TextColor3=T.txt, BackgroundTransparency=1, Position=UDim2.fromOffset(38,0), Size=UDim2.new(1,-38,1,0), TextXAlignment=Enum.TextXAlignment.Left, Parent=mainTglRow })
+    H.new("TextLabel", { Text="[LMB | always]", Font=FontMed, TextSize=12, TextColor3=T.dim, BackgroundTransparency=1, AnchorPoint=Vector2.new(1,0.5), Position=UDim2.new(1,0,0.5,0), Size=UDim2.fromOffset(100,16), TextXAlignment=Enum.TextXAlignment.Right, Parent=mainTglRow })
+    
+    mtBox.InputBegan:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+            local v = not Settings.SilentAim.Enabled
+            Settings.SilentAim.Enabled = v
+            if v then SA.hook() else SA.unhook() end
+            if St.saFovGui then St.saFovGui.Enabled = v and Settings.SilentAim.ShowFOV end
+            Svc.TS:Create(mtBox, TweenInfo.new(0.15), {BackgroundColor3 = v and T.acc or T.off}):Play()
+            Svc.TS:Create(mtInner, TweenInfo.new(0.15), {Position = UDim2.fromOffset(v and 15 or 2, 8)}):Play()
+        end
+    end)
+    
+    H.new("TextLabel", { Text="Targeting", Font=FontBold, TextSize=14, TextColor3=T.acc, BackgroundTransparency=1, Size=UDim2.new(1,0,0,20), TextXAlignment=Enum.TextXAlignment.Left, LayoutOrder=3, Parent=saL })
     Wg.makeDropdown(saL, 4, { name="Method", options={"Viewport"}, default=Settings.SilentAim.Method, callback=function(v) Settings.SilentAim.Method = v end })
     Wg.makeDropdown(saL, 5, { name="Bodypart", options={"Head", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg", "Random", "Random2"}, default=Settings.SilentAim.Bodypart, callback=function(v) Settings.SilentAim.Bodypart = v end })
-
-    H.new("TextLabel", { Text="Settings", Font=FontBold, TextSize=14, TextColor3=T.acc, BackgroundTransparency=1, Size=UDim2.new(1,0,0,22), TextXAlignment=Enum.TextXAlignment.Left, LayoutOrder=6, Parent=saL })
-    Wg.makeToggle(saL, 7, {name="Sticky aim", default=Settings.SilentAim.StickyAim, callback=function(v) Settings.SilentAim.StickyAim = v end})
-    Wg.makeToggle(saL, 8, {name="No delay", default=Settings.SilentAim.NoDelay, callback=function(v) Settings.SilentAim.NoDelay = v end})
-    Wg.makeToggle(saL, 9, {name="FOV", default=Settings.SilentAim.ShowFOV, callback=function(v) Settings.SilentAim.ShowFOV = v; if St.saFovGui then St.saFovGui.Enabled = v and Settings.SilentAim.Enabled end end})
-    Wg.makeSlider(saL, 10, {name="FOV radius", min=20, max=500, default=Settings.SilentAim.FOVSize, callback=function(v) 
+    
+    H.new("TextLabel", { Text="Settings", Font=FontBold, TextSize=14, TextColor3=T.acc, BackgroundTransparency=1, Size=UDim2.new(1,0,0,20), TextXAlignment=Enum.TextXAlignment.Left, LayoutOrder=6, Parent=saL })
+    
+    -- Custom Toggles matching image
+    local function imgToggle(text, default, callback)
+        local row = H.new("Frame", { Size=UDim2.new(1,0,0,24), BackgroundTransparency=1, LayoutOrder=0, Parent=saL })
+        local box = H.new("Frame", { AnchorPoint=Vector2.new(0,0.5), Position=UDim2.new(0,0,0.5,0), Size=UDim2.fromOffset(30,16), BackgroundColor3=default and T.acc or T.off, BorderSizePixel=0, Parent=row })
+        H.corner(8, box)
+        local inner = H.new("Frame", { AnchorPoint=Vector2.new(0,0.5), Position=UDim2.fromOffset(default and 15 or 2,8), Size=UDim2.fromOffset(12,12), BackgroundColor3=Color3.new(1,1,1), BorderSizePixel=0, Parent=box })
+        H.corner(6, inner)
+        H.new("TextLabel", { Text=text, Font=FontBold, TextSize=13, TextColor3=T.txt, BackgroundTransparency=1, Position=UDim2.fromOffset(38,0), Size=UDim2.new(1,-38,1,0), TextXAlignment=Enum.TextXAlignment.Left, Parent=row })
+        box.InputBegan:Connect(function(inp)
+            if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+                local v = not default
+                Svc.TS:Create(box, TweenInfo.new(0.15), {BackgroundColor3 = v and T.acc or T.off}):Play()
+                Svc.TS:Create(inner, TweenInfo.new(0.15), {Position = UDim2.fromOffset(v and 15 or 2, 8)}):Play()
+                default = v
+                callback(v)
+            end
+        end)
+        return row
+    end
+    
+    imgToggle("Sticky aim", Settings.SilentAim.StickyAim, function(v) Settings.SilentAim.StickyAim = v end).LayoutOrder = 7
+    imgToggle("No delay", Settings.SilentAim.NoDelay, function(v) Settings.SilentAim.NoDelay = v end).LayoutOrder = 8
+    imgToggle("Hitsound", Settings.SilentAim.Hitsound, function(v) Settings.SilentAim.Hitsound = v end).LayoutOrder = 9
+    imgToggle("Target NPCs", Settings.SilentAim.TargetNPCs, function(v) Settings.SilentAim.TargetNPCs = v end).LayoutOrder = 10
+    imgToggle("FOV", Settings.SilentAim.ShowFOV, function(v) Settings.SilentAim.ShowFOV = v; if St.saFovGui then St.saFovGui.Enabled = v and Settings.SilentAim.Enabled end end).LayoutOrder = 11
+    
+    -- Custom Slider
+    local fovRadRow = Wg.makeSlider(saL, 12, {name="FOV radius", min=20, max=500, default=Settings.SilentAim.FOVSize, callback=function(v) 
         Settings.SilentAim.FOVSize = v
         if St.saFovCircle then St.saFovCircle.Size = UDim2.fromOffset(v*2, v*2) end
     end})
     
-    -- Custom "Show FOV" toggle + color block
-    local saColorRow = H.new("Frame", {Size=UDim2.new(1,0,0,28), BackgroundTransparency=1, LayoutOrder=11, Parent=saL})
-    local saShowFovLbl = H.new("TextLabel", {Text="Show FOV", Font=FontMed, TextSize=13, TextColor3=T.txt, BackgroundTransparency=1, Size=UDim2.new(1,-60,1,0), TextXAlignment=Enum.TextXAlignment.Left, Parent=saColorRow})
-    local cBtn = H.new("TextButton", {Text="", AutoButtonColor=false, BackgroundColor3=Settings.SilentAim.FOVColor, AnchorPoint=Vector2.new(1,0.5), Position=UDim2.new(1,-30,0.5,0), Size=UDim2.fromOffset(22,18), BorderSizePixel=0, Parent=saColorRow})
-    H.corner(4, cBtn)
-    local sfBox = H.new("Frame", {AnchorPoint=Vector2.new(1,0.5), Position=UDim2.new(1,0,0.5,0), Size=UDim2.fromOffset(20,20), BackgroundColor3=Settings.SilentAim.ShowFOV and T.acc or T.off, BorderSizePixel=0, Parent=saColorRow})
-    H.corner(10, sfBox)
-    local sfInner = H.new("Frame", {AnchorPoint=Vector2.new(0.5,0.5), Position=UDim2.fromScale(0.5,0.5), Size=UDim2.fromOffset(Settings.SilentAim.ShowFOV and 12 or 8, Settings.SilentAim.ShowFOV and 12 or 8), BackgroundColor3=Color3.fromRGB(255,255,255), BorderSizePixel=0, BackgroundTransparency=Settings.SilentAim.ShowFOV and 0 or 0.4, Parent=sfBox})
-    H.corner(9999, sfInner)
+    -- Show FOV + Color Block
+    local showFovRow = H.new("Frame", { Size=UDim2.new(1,0,0,24), BackgroundTransparency=1, LayoutOrder=13, Parent=saL })
+    local sfBox = H.new("Frame", { AnchorPoint=Vector2.new(0,0.5), Position=UDim2.new(0,0,0.5,0), Size=UDim2.fromOffset(30,16), BackgroundColor3=Settings.SilentAim.ShowFOV and T.acc or T.off, BorderSizePixel=0, Parent=showFovRow })
+    H.corner(8, sfBox)
+    local sfInner = H.new("Frame", { AnchorPoint=Vector2.new(0,0.5), Position=UDim2.fromOffset(Settings.SilentAim.ShowFOV and 15 or 2,8), Size=UDim2.fromOffset(12,12), BackgroundColor3=Color3.new(1,1,1), BorderSizePixel=0, Parent=sfBox })
+    H.corner(6, sfInner)
+    H.new("TextLabel", { Text="Show FOV", Font=FontBold, TextSize=13, TextColor3=T.txt, BackgroundTransparency=1, Position=UDim2.fromOffset(38,0), Size=UDim2.new(1,-38,1,0), TextXAlignment=Enum.TextXAlignment.Left, Parent=showFovRow })
     
     sfBox.InputBegan:Connect(function(inp)
         if inp.UserInputType == Enum.UserInputType.MouseButton1 then
-            local newVal = not Settings.SilentAim.ShowFOV
-            Settings.SilentAim.ShowFOV = newVal
-            if St.saFovGui then St.saFovGui.Enabled = newVal and Settings.SilentAim.Enabled end
-            Svc.TS:Create(sfBox, TweenInfo.new(0.15), {BackgroundColor3 = newVal and T.acc or T.off}):Play()
-            Svc.TS:Create(sfInner, TweenInfo.new(0.15), {Size=UDim2.fromOffset(newVal and 12 or 8, newVal and 12 or 8), BackgroundTransparency = newVal and 0 or 0.4}):Play()
+            local v = not Settings.SilentAim.ShowFOV
+            Settings.SilentAim.ShowFOV = v
+            if St.saFovGui then St.saFovGui.Enabled = v and Settings.SilentAim.Enabled end
+            Svc.TS:Create(sfBox, TweenInfo.new(0.15), {BackgroundColor3 = v and T.acc or T.off}):Play()
+            Svc.TS:Create(sfInner, TweenInfo.new(0.15), {Position = UDim2.fromOffset(v and 15 or 2, 8)}):Play()
         end
     end)
     
+    local cBtn = H.new("TextButton", { Text="", AutoButtonColor=false, BackgroundColor3=Settings.SilentAim.FOVColor, AnchorPoint=Vector2.new(1,0.5), Position=UDim2.new(1,0,0.5,0), Size=UDim2.fromOffset(16,16), BorderSizePixel=0, Parent=showFovRow })
     cBtn.MouseButton1Click:Connect(function()
         Settings.SilentAim.FOVColor = Settings.SilentAim.FOVColor == Color3.fromRGB(255,0,0) and Color3.fromRGB(0,255,0) or Color3.fromRGB(255,0,0)
         cBtn.BackgroundColor3 = Settings.SilentAim.FOVColor
@@ -710,122 +703,117 @@ local function buildWindow()
     end)
 
     -- ================= AIMBOT PAGE =================
-    local aimPage = makePage("Aimbot")
-    local aimL = H.new("ScrollingFrame", { Size=UDim2.fromScale(1,1), BackgroundTransparency=1, ScrollBarThickness=3, ScrollBarImageColor3=T.st, CanvasSize=UDim2.new(), AutomaticCanvasSize=Enum.AutomaticSize.Y, Parent=aimPage })
-    H.new("UIListLayout", {Padding=UDim.new(0,10), SortOrder=Enum.SortOrder.LayoutOrder, Parent=aimL})
-    uiToggleRefs.AimbotEnabled = Wg.makeToggle(aimL, 1, {name="Enabled", default=Settings.Aimbot.Enabled, callback=function(v) Settings.Aimbot.Enabled = v; if not v then St.clearAimState() end end})
-    Wg.makeSlider(aimL, 2, {name="FOV Size", min=20, max=500, default=Settings.Aimbot.FOVSize, callback=function(v) Settings.Aimbot.FOVSize = v end})
+    local aimL = makePage("Aimbot")
+    uiToggleRefs.AimbotEnabled = Wg.makeToggle(aimL, 1, {name="Enabled", default=Settings.Aimbot.Enabled, callback=function(v) Settings.Aimbot.Enabled = v end})
+    Wg.makeToggle(aimL, 2, {name="Target NPCs", default=Settings.Aimbot.TargetNPCs, callback=function(v) Settings.Aimbot.TargetNPCs = v end})
+    Wg.makeSlider(aimL, 3, {name="FOV Size", min=20, max=500, default=Settings.Aimbot.FOVSize, callback=function(v) Settings.Aimbot.FOVSize = v end})
 
     -- ================= RAGEBOT PAGE =================
-    local ragePage = makePage("Ragebot")
-    local rg = H.new("ScrollingFrame", { Size=UDim2.fromScale(1,1), BackgroundTransparency=1, ScrollBarThickness=3, CanvasSize=UDim2.new(), AutomaticCanvasSize=Enum.AutomaticSize.Y, Parent=ragePage })
-    H.new("UIListLayout", {Padding=UDim.new(0,10), Parent=rg})
-    uiToggleRefs.RagebotEnabled = Wg.makeToggle(rg, 1, {name="Enabled", default=Settings.Ragebot.Enabled, callback=function(v) Settings.Ragebot.Enabled = v; if not v and RB then RB.reset() end end})
-    H.new("TextLabel", { Text = "Above mode • Range 750 studs\nPrioritises Skeleton", Font = Font, TextSize = 12, TextColor3 = T.dim, BackgroundTransparency = 1, Size = UDim2.new(1,0,0,36), LayoutOrder = 2, Parent = rg })
+    local rageL = makePage("Ragebot")
+    uiToggleRefs.RagebotEnabled = Wg.makeToggle(rageL, 1, {name="Enabled", default=Settings.Ragebot.Enabled, callback=function(v) Settings.Ragebot.Enabled = v end})
+    H.new("TextLabel", { Text="Above mode • Range 750 studs\nPrioritises Skeleton", Font=Font, TextSize=12, TextColor3=T.dim, BackgroundTransparency=1, Size=UDim2.new(1,0,0,36), LayoutOrder=2, Parent=rageL })
+
+    -- ================= MOVEMENT PAGE =================
+    local movL = makePage("Movement")
+    Wg.makeToggle(movL, 1, {name="Fly", default=Settings.Movement.Fly, callback=function(v) Settings.Movement.Fly = v end})
+    Wg.makeToggle(movL, 2, {name="Noclip", default=Settings.Movement.Noclip, callback=function(v) Settings.Movement.Noclip = v end})
 
     -- ================= SIDEBAR =================
-    local function addSection(title, items)
-        local sec = H.new("Frame", { Size=UDim2.new(1,0,0,22+(#items*26)), BackgroundTransparency=1, Parent=sidebar })
-        H.new("UIListLayout", {Padding=UDim.new(0,2), Parent=sec})
-        local hdr = H.new("TextLabel", { Text=title, Font=FontBold, TextSize=14, TextColor3=T.txt, BackgroundTransparency=1, Size=UDim2.new(1,0,0,22), TextXAlignment=Enum.TextXAlignment.Left, Parent=sec })
-        H.pad(0,0,8,0,hdr)
-        for i, item in ipairs(items) do
-            local row = H.new("TextButton", { Text="", AutoButtonColor=false, Size=UDim2.new(1,0,0,24), BackgroundColor3=T.pn, BackgroundTransparency=1, LayoutOrder=i, Parent=sec })
-            H.corner(6, row)
-            local lbl = H.new("TextLabel", { Text=item.name, Font=Font, TextSize=13, TextColor3=T.dim, BackgroundTransparency=1, Size=UDim2.new(1,-16,1,0), Position=UDim2.fromOffset(10,0), TextXAlignment=Enum.TextXAlignment.Left, Parent=row })
-            sidebarRows[item.name] = {row=row, label=lbl}
-            
-            local function applyVisual(isHover)
-                local isActive = (currentPage == item.name)
-                if sidebarTweens[item.name] then for _, t in ipairs(sidebarTweens[item.name]) do t:Cancel() end end
-                local rT = Svc.TS:Create(row, TweenInfo.new(0.12), { BackgroundColor3 = isActive and T.hov or T.pn, BackgroundTransparency = isActive and 0 or 1 })
-                local lT = Svc.TS:Create(lbl, TweenInfo.new(0.12), { TextColor3 = isActive and T.txt or (isHover and T.txt or T.dim), Position = UDim2.fromOffset((isHover and not isActive) and 12 or 10, 0) })
-                rT:Play(); lT:Play()
-                sidebarTweens[item.name] = {rT, lT}
+    local function addTab(name)
+        local btn = H.new("TextButton", { Text="", AutoAction=false, BackgroundColor3=T.pn, Size=UDim2.new(1,0,0,30), Parent=sidebarScroll })
+        H.corner(4, btn)
+        local txt = H.new("TextLabel", { Text=name, Font=FontBold, TextSize=13, TextColor3=T.dim, BackgroundTransparency=1, Size=UDim2.fromScale(1,1), Parent=btn })
+        
+        btn.MouseEnter:Connect(function()
+            if currentPage ~= name then txt.TextColor3 = T.txt; btn.BackgroundTransparency = 0.5 end
+        end)
+        btn.MouseLeave:Connect(function()
+            if currentPage ~= name then txt.TextColor3 = T.dim; btn.BackgroundTransparency = 1 end
+        end)
+        btn.MouseButton1Click:Connect(function()
+            currentPage = name
+            for n, data in pairs(PAGES) do
+                data.page.Visible = (n == name)
             end
-            
-            row.MouseEnter:Connect(function() applyVisual(true) end)
-            row.MouseLeave:Connect(function() applyVisual(false) end)
-            row.MouseButton1Click:Connect(function()
-                for name, entry in pairs(sidebarRows) do
-                    local isAct = (name == item.name)
-                    if sidebarTweens[name] then for _, t in ipairs(sidebarTweens[name]) do t:Cancel() end end
-                    entry.row.BackgroundColor3 = isAct and T.hov or T.pn
-                    entry.row.BackgroundTransparency = isAct and 0 or 1
-                    entry.label.TextColor3 = isAct and T.txt or T.dim
-                    entry.label.Position = UDim2.fromOffset(10, 0)
+            for _, child in ipairs(sidebarScroll:GetChildren()) do
+                if child:IsA("TextButton") then
+                    local label = child:FindFirstChildOfClass("TextLabel")
+                    if label.Text == name then
+                        child.BackgroundTransparency = 0
+                        child.BackgroundColor3 = T.acc
+                        label.TextColor3 = Color3.new(1,1,1)
+                    else
+                        child.BackgroundTransparency = 1
+                        child.BackgroundColor3 = T.pn
+                        label.TextColor3 = T.dim
+                    end
                 end
-                currentPage = item.name
-                for n, p in pairs(PAGES) do p.Visible = (n == currentPage) end
-            end)
-        end
+            end
+        end)
+        sidebarRows[name] = btn
     end
 
-    addSection("Combat", { {name="Silent Aim"}, {name="Aimbot"}, {name="Ragebot"} })
+    addTab("Silent Aim")
+    addTab("Aimbot")
+    addTab("Ragebot")
+    addTab("Movement")
     
+    -- Start Page
     currentPage = "Silent Aim"
-    PAGES["Silent Aim"].Visible = true
-    sidebarRows["Silent Aim"].row.BackgroundColor3 = T.hov
-    sidebarRows["Silent Aim"].row.BackgroundTransparency = 0
-    sidebarRows["Silent Aim"].label.TextColor3 = T.txt
-    sidebarRows["Silent Aim"].label.Position = UDim2.fromOffset(10, 0)
+    PAGES["Silent Aim"].page.Visible = true
+    sidebarRows["Silent Aim"].BackgroundTransparency = 0
+    sidebarRows["Silent Aim"].BackgroundColor3 = T.acc
+    sidebarRows["Silent Aim"]:FindFirstChildOfClass("TextLabel").TextColor3 = Color3.new(1,1,1)
 
-    -- DRAG
-    local dragging, dragStart, startPos
-    trackWindow(Svc.UIS.InputBegan:Connect(function(inp)
+    -- Dragging
+    local dragging, startPos, dragStart
+    topBar.InputBegan:Connect(function(inp)
         if inp.UserInputType == Enum.UserInputType.MouseButton1 then
-            local mp = inp.Position; local tp = topBar.AbsolutePosition
-            if mp.X >= tp.X and mp.X <= tp.X+topBar.AbsoluteSize.X and mp.Y >= tp.Y and mp.Y <= tp.Y+topBar.AbsoluteSize.Y then
-                dragging = true; dragStart = Vector2.new(mp.X, mp.Y); startPos = root.Position
-            end
+            dragging = true; dragStart = Vector2.new(inp.Position.X, inp.Position.Y); startPos = root.Position
         end
-    end))
-    trackWindow(Svc.UIS.InputChanged:Connect(function(inp)
+    end)
+    Svc.UIS.InputChanged:Connect(function(inp)
         if dragging and inp.UserInputType == Enum.UserInputType.MouseMovement then
             local d = Vector2.new(inp.Position.X, inp.Position.Y) - dragStart
             root.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
         end
-    end))
-    trackWindow(Svc.UIS.InputEnded:Connect(function(inp) if inp.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end end))
+    end)
+    Svc.UIS.InputEnded:Connect(function(inp) if inp.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end end)
 end
 
 -- ============================================================
--- MAIN LOOP & BINDS
+-- RUNTIME HOOKS & BINDS
 -- ============================================================
-local mainStep = function()
-    if unloaded then return end
-    if Svc.WS.CurrentCamera ~= Camera then Camera = Svc.WS.CurrentCamera end
-    -- Visual updates only (Silent Aim is handled by __namecall hook)
-    if Settings.SilentAim.Enabled then
-        local t = getSilentAimTarget()
-        St.saTarget = t
+Svc.RS.RenderStepped:Connect(function()
+    if not St.menuVisible then
+        St.aimStep()
+        St.rageStep()
+        St.moveStep()
     end
-end
+    if Settings.SilentAim.Enabled then getSilentAimTarget() end
+    if Settings.SilentAim.ShowFOV and St.saFovGui and St.saFovGui.Enabled and St.saFovCircle then
+        local mp = Svc.UIS:GetMouseLocation()
+        local inset = getGuiInset()
+        St.saFovCircle.Position = UDim2.fromOffset(mp.X - inset.X, mp.Y - inset.Y)
+    end
+end)
 
-track(Svc.RS.RenderStepped:Connect(mainStep))
-
-track(Svc.UIS.InputBegan:Connect(function(inp, gpe)
+Svc.UIS.InputBegan:Connect(function(inp, gpe)
     if gpe or St.uiHovered then return end
-    if Settings.Keybinds and G.inputMatches(inp, Settings.Keybinds.MenuKey) then
+    if inp.UserInputType == Enum.UserInputType.MouseButton2 then St.aimingHeld = true end
+    if inp.KeyCode == Enum.KeyCode.RightShift then
         St.menuVisible = not St.menuVisible
         St.gui.Enabled = St.menuVisible
     end
-end))
+end)
 
-function AeroUnload()
-    if unloaded then return end
-    unloaded = true
-    SA.unhook()
-    if St.gui then St.gui:Destroy() end
-    if St.saFovGui then St.saFovGui:Destroy() end
-    if St.fovGui then St.fovGui:Destroy() end
-    for _, c in ipairs(Connections) do c:Disconnect() end
-    print("[Aero Lite] unloaded")
-end
+Svc.UIS.InputEnded:Connect(function(inp)
+    if inp.UserInputType == Enum.UserInputType.MouseButton2 then St.aimingHeld = false end
+end)
 
 PF.loadAutoSettings()
 task.defer(function()
     buildWindow()
     if Settings.SilentAim.Enabled then SA.hook() end
-    print("[Aero Lite] loaded successfully")
+    print("[Aero] loaded successfully")
 end)
